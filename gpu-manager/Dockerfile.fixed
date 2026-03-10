@@ -1,0 +1,13 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# Install Flask (pynvml is optional - manager runs without it)
+RUN pip install --no-cache-dir flask pynvml
+
+# Copy fixed manager
+COPY gpu_manager_fixed.py gpu_manager.py
+
+EXPOSE 5000
+
+CMD ["python", "gpu_manager.py"]

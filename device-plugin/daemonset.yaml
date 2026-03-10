@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: gpu-slice-device-plugin
+  namespace: kube-system
+  labels:
+    app: gpu-slice-device-plugin
+spec:
+  selector:
+    matchLabels:
+      app: gpu-slice-device-plugin
+  template:
+    metadata:
+      labels:
+        app: gpu-slice-device-plugin
+    spec:
+      # Only run on GPU nodes
+      nodeSelector:
+        accelerator: nvidia
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+      - key: node-role.kubernetes.io/master
+        operator: Exists
+        effect: NoSchedule
+      hostNetwork: true
+      hostPID: true
+      containers:
+      - name: gpu-slice-device-plugin
+        image: gpu-slice-plugin:latest
+        imagePullPolicy: Never  # Use local image
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: device-plugin
+          mountPath: /var/lib/kubelet/device-plugins
+        - name: dev
+          mountPath: /dev
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
+      volumes:
+      - name: device-plugin
+        hostPath:
+          path: /var/lib/kubelet/device-plugins
+          type: Directory
+      - name: dev
+        hostPath:
+          path: /dev
+          type: Directory
+      restartPolicy: Always

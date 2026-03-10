@@ -1,0 +1,88 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: gpu-manager
+  namespace: kube-system
+  labels:
+    app: gpu-manager
+spec:
+  selector:
+    matchLabels:
+      app: gpu-manager
+  template:
+    metadata:
+      labels:
+        app: gpu-manager
+    spec:
+      nodeSelector:
+        accelerator: nvidia
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+      hostNetwork: true
+      hostPID: true
+      containers:
+      - name: gpu-manager
+        image: gpu-manager:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8080
+          hostPort: 8080
+          name: api
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: dev
+          mountPath: /dev
+        - name: proc
+          mountPath: /host/proc
+          readOnly: true
+        - name: sys
+          mountPath: /host/sys
+          readOnly: true
+        - name: log
+          mountPath: /var/log
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: NVIDIA_VISIBLE_DEVICES
+          value: "all"
+        - name: NVIDIA_DRIVER_CAPABILITIES
+          value: "compute,utility"
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+      volumes:
+      - name: dev
+        hostPath:
+          path: /dev
+      - name: proc
+        hostPath:
+          path: /proc
+      - name: sys
+        hostPath:
+          path: /sys
+      - name: log
+        hostPath:
+          path: /var/log/gpu-manager
+          type: DirectoryOrCreate
+      restartPolicy: Always

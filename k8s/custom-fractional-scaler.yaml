@@ -1,0 +1,152 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: custom-fractional-app
+  namespace: default
+  labels:
+    app: custom-fractional-app
+    scaler: custom-fractional
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: custom-fractional-app
+      scaler: custom-fractional
+  template:
+    metadata:
+      labels:
+        app: custom-fractional-app
+        scaler: custom-fractional
+    spec:
+      nodeSelector:
+        nvidia.com/gpu.present: "true"
+      containers:
+      - name: app
+        image: gpu-fractional-app:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8080
+          name: http
+        
+        resources:
+          requests:
+            example.com/gpu-slice: 1  # 1 GPU slice (1GB)
+            cpu: "300m"
+            memory: "512Mi"
+          limits:
+            example.com/gpu-slice: 1  # 1 GPU slice (1GB)
+            cpu: "1000m"
+            memory: "1Gi"
+        
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: GPU_SLICE_ID
+          value: "slice-1gb"
+        - name: FRACTIONAL_GPU
+          value: "1.0"
+        
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: custom-fractional-app
+  namespace: default
+  labels:
+    app: custom-fractional-app
+spec:
+  selector:
+    app: custom-fractional-app
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: http
+  type: ClusterIP
+
+---
+# Custom GPU-aware scaler
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: custom-gpu-scaler
+  namespace: default
+  labels:
+    app: custom-gpu-scaler
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: custom-gpu-scaler
+  template:
+    metadata:
+      labels:
+        app: custom-gpu-scaler
+    spec:
+      serviceAccountName: custom-gpu-scaler
+      containers:
+      - name: scaler
+        image: custom-gpu-scaler:latest
+        imagePullPolicy: Never
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "200m"
+            memory: "256Mi"
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: custom-gpu-scaler
+  namespace: default
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: custom-gpu-scaler
+  namespace: default
+rules:
+- apiGroups: ["apps"]
+  resources: ["deployments", "deployments/scale"]
+  verbs: ["get", "list", "watch", "patch", "update"]
+- apiGroups: [""]
+  resources: ["pods", "nodes"]
+  verbs: ["get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: custom-gpu-scaler
+  namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: custom-gpu-scaler
+subjects:
+- kind: ServiceAccount
+  name: custom-gpu-scaler
+  namespace: default

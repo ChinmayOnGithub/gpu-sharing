@@ -1,0 +1,170 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: gpu-sidecar
+  namespace: kube-system
+  labels:
+    app: gpu-sidecar
+spec:
+  selector:
+    matchLabels:
+      app: gpu-sidecar
+  template:
+    metadata:
+      labels:
+        app: gpu-sidecar
+    spec:
+      nodeSelector:
+        nvidia.com/gpu.present: "true"
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
+      hostNetwork: true
+      hostPID: true
+      
+      # ── Init: verify NVIDIA devices exist before starting ──────────────────
+      initContainers:
+      - name: nvidia-device-check
+        image: busybox:latest
+        imagePullPolicy: IfNotPresent
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          echo "=== Checking NVIDIA devices ==="
+          ls -la /dev/nvidia* 2>/dev/null || echo "WARNING: No /dev/nvidia* devices found"
+          echo "=== Init complete ==="
+        volumeMounts:
+        - name: dev
+          mountPath: /dev
+        securityContext:
+          privileged: true
+      
+      containers:
+      # ── Container 1: GPU Slice Device Plugin (Go) ────────────────────────
+      - name: gpu-slice-plugin
+        image: gpu-slice-plugin:latest
+        imagePullPolicy: Never
+        securityContext:
+          privileged: true
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: GPU_MANAGER_URL
+          value: "http://127.0.0.1:5000"
+        volumeMounts:
+        - name: device-plugin
+          mountPath: /var/lib/kubelet/device-plugins
+        - name: dev
+          mountPath: /dev
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+        livenessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - "test -S /var/lib/kubelet/device-plugins/gpu-slice.sock"
+          initialDelaySeconds: 30
+          periodSeconds: 30
+      
+      # ── Container 2: GPU Manager (Python/Flask) ───────────────────────────
+      # FIXED: pynvml is now optional - manager runs even without libnvidia-ml.so
+      - name: gpu-manager
+        image: gpu-manager:latest
+        imagePullPolicy: Never
+        securityContext:
+          privileged: true
+        ports:
+        - name: api
+          containerPort: 5000
+          protocol: TCP
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: GPU_TOTAL_MEMORY
+          value: "6GB"
+        - name: NUM_SLICES
+          value: "6"
+        - name: API_PORT
+          value: "5000"
+        # These let NVML find the GPU if libraries ARE present
+        - name: NVIDIA_VISIBLE_DEVICES
+          value: "all"
+        - name: NVIDIA_DRIVER_CAPABILITIES
+          value: "compute,utility"
+        # Tell Python where to look for libnvidia-ml.so
+        # We try multiple common locations
+        - name: LD_LIBRARY_PATH
+          value: "/usr/lib/x86_64-linux-gnu:/usr/local/nvidia/lib64:/usr/local/nvidia/lib"
+        volumeMounts:
+        - name: dev
+          mountPath: /dev
+        - name: proc
+          mountPath: /host/proc
+          readOnly: true
+        - name: sys
+          mountPath: /host/sys
+          readOnly: true
+        # Mount NVIDIA libs from host - covers Ubuntu 22.04/24.04 paths
+        - name: nvidia-libs-x86
+          mountPath: /usr/lib/x86_64-linux-gnu
+          readOnly: true
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        # Health check hits /health - which now always returns 200
+        # (even in simulation mode when NVML is unavailable)
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 10
+          periodSeconds: 30
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          failureThreshold: 3
+      
+      volumes:
+      - name: device-plugin
+        hostPath:
+          path: /var/lib/kubelet/device-plugins
+          type: Directory
+      - name: dev
+        hostPath:
+          path: /dev
+          type: Directory
+      - name: proc
+        hostPath:
+          path: /proc
+          type: Directory
+      - name: sys
+        hostPath:
+          path: /sys
+          type: Directory
+      # NVIDIA user-space libraries live here on Ubuntu 22.04/24.04
+      - name: nvidia-libs-x86
+        hostPath:
+          path: /usr/lib/x86_64-linux-gnu
+          type: Directory

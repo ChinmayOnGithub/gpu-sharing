@@ -1,0 +1,123 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hpa-fractional-app
+  namespace: default
+  labels:
+    app: hpa-fractional-app
+    scaler: hpa-fractional
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hpa-fractional-app
+      scaler: hpa-fractional
+  template:
+    metadata:
+      labels:
+        app: hpa-fractional-app
+        scaler: hpa-fractional
+    spec:
+      nodeSelector:
+        nvidia.com/gpu.present: "true"
+      containers:
+      - name: app
+        image: gpu-fractional-app:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8080
+          name: http
+        
+        resources:
+          requests:
+            example.com/gpu-slice: 1   # 1 GPU slice (1GB)
+            cpu: "500m"                # Higher CPU for HPA triggering
+            memory: "512Mi"
+          limits:
+            example.com/gpu-slice: 1   # 1 GPU slice (1GB)
+            cpu: "2000m"               # Allow CPU bursts for scaling
+            memory: "1Gi"
+        
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: GPU_SLICE_ID
+          value: "slice-1gb"
+        - name: FRACTIONAL_GPU
+          value: "1.0"
+        
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hpa-fractional-app
+  namespace: default
+  labels:
+    app: hpa-fractional-app
+spec:
+  selector:
+    app: hpa-fractional-app
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: http
+  type: ClusterIP
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: hpa-fractional-autoscaler
+  namespace: default
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: hpa-fractional-app
+  minReplicas: 1
+  maxReplicas: 6  # Max 6 because we have 6 GPU slices
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 50  # Scale when CPU > 50%
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      selectPolicy: Max
+      policies:
+      - type: Percent
+        value: 100  # Double pods
+        periodSeconds: 15
+      - type: Pods
+        value: 2    # Or add 2 pods
+        periodSeconds: 15
+    scaleDown:
+      stabilizationWindowSeconds: 30
+      selectPolicy: Min
+      policies:
+      - type: Percent
+        value: 50   # Remove 50% of pods
+        periodSeconds: 60

@@ -1,0 +1,96 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: gpu-slice-device-plugin
+  namespace: kube-system
+  labels:
+    app: gpu-slice-device-plugin
+spec:
+  selector:
+    matchLabels:
+      app: gpu-slice-device-plugin
+  template:
+    metadata:
+      labels:
+        app: gpu-slice-device-plugin
+    spec:
+      # Target nodes with NVIDIA GPUs
+      nodeSelector:
+        accelerator: nvidia
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
+      hostNetwork: true
+      hostPID: true
+      initContainers:
+      - name: nvidia-device-check
+        image: nvidia/cuda:11.8-base-ubuntu20.04
+        command: ["/bin/sh"]
+        args:
+        - -c
+        - |
+          echo "Checking for NVIDIA devices..."
+          ls -la /dev/nvidia* || echo "No NVIDIA devices found"
+          nvidia-smi || echo "nvidia-smi not available"
+        volumeMounts:
+        - name: dev
+          mountPath: /dev
+        securityContext:
+          privileged: true
+      containers:
+      - name: gpu-slice-device-plugin
+        image: gpu-slice-plugin:latest
+        imagePullPolicy: Never
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: device-plugin
+          mountPath: /var/lib/kubelet/device-plugins
+        - name: dev
+          mountPath: /dev
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: GPU_MODEL
+          value: "RTX3060"
+        - name: GPU_MEMORY
+          value: "6GB"
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        livenessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - "pgrep gpu-slice-plugin"
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        readinessProbe:
+          exec:
+            command:
+            - /bin/sh
+            - -c
+            - "test -S /var/lib/kubelet/device-plugins/gpu-slice.sock"
+          initialDelaySeconds: 10
+          periodSeconds: 10
+      volumes:
+      - name: device-plugin
+        hostPath:
+          path: /var/lib/kubelet/device-plugins
+          type: Directory
+      - name: dev
+        hostPath:
+          path: /dev
+          type: Directory
+      restartPolicy: Always
