@@ -1,0 +1,255 @@
+pradnyanand-jade@Jade:~/Downloads/chinmay-plugin$ python3 demo-fractional.py 
+
+============================================================
+  FRACTIONAL GPU AUTOSCALING COMPARISON
+  HPA vs Custom Fractional GPU Scaler
+============================================================
+
+🎯 System Features:
+✅ GPU slice allocation (1GB per slice)
+✅ Memory-based spatial partitioning
+✅ HPA: CPU-based scaling
+✅ Custom: GPU-aware intelligent scaling
+
+Press Enter to start experiments...
+
+========================================
+  PREPARING HPA EXPERIMENT
+========================================
+
+============================================================
+  HPA Fractional GPU EXPERIMENT - 120 SECONDS
+============================================================
+
+TIME:  17s/120s | Pods: 0 | GPU: 0/6 | Requests: 4829 | Failures: 0^CTraceback (most recent call last):
+  File "/home/pradnyanand-jade/Downloads/chinmay-plugin/demo-fractional.py", line 285, in <module>
+    main()
+  File "/home/pradnyanand-jade/Downloads/chinmay-plugin/demo-fractional.py", line 187, in main
+    hpa_results = run_experiment("HPA Fractional GPU", HPA_DEPLOY, HPA_URL)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/pradnyanand-jade/Downloads/chinmay-plugin/demo-fractional.py", line 125, in run_experiment
+    time.sleep(1)
+KeyboardInterrupt
+
+pradnyanand-jade@Jade:~/Downloads/chinmay-plugin$ ./build-and-deploy-all.sh 
+🚀 BUILDING AND DEPLOYING FRACTIONAL GPU SYSTEM
+===============================================
+1. Building and importing Docker images...
+  Building GPU manager...
+DEPRECATED: The legacy builder is deprecated and will be removed in a future release.
+            Install the buildx component to build images with BuildKit:
+            https://docs.docker.com/go/buildx/
+
+Sending build context to Docker daemon  50.69kB
+Step 1/11 : FROM python:3.10-slim
+ ---> c2cb0450ef76
+Step 2/11 : RUN apt-get update && apt-get install -y     curl     && rm -rf /var/lib/apt/lists/*
+ ---> Using cache
+ ---> 76cfff369b2c
+Step 3/11 : WORKDIR /app
+ ---> Using cache
+ ---> f28bfbdcf136
+Step 4/11 : COPY requirements.txt .
+ ---> Using cache
+ ---> 306645f7e283
+Step 5/11 : RUN pip install --no-cache-dir -r requirements.txt
+ ---> Using cache
+ ---> b9dd8395cbc6
+Step 6/11 : COPY gpu_manager.py .
+ ---> Using cache
+ ---> b66563e0c0d9
+Step 7/11 : COPY test_client.py .
+ ---> Using cache
+ ---> 86e40d21cfbc
+Step 8/11 : RUN mkdir -p /var/log
+ ---> Using cache
+ ---> 9e2cdd09fdaa
+Step 9/11 : EXPOSE 5000
+ ---> Using cache
+ ---> 116c6541a9c5
+Step 10/11 : HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3     CMD curl -f http://localhost:5000/health || exit 1
+ ---> Using cache
+ ---> c2d76caf80e8
+Step 11/11 : CMD ["python", "gpu_manager.py"]
+ ---> Using cache
+ ---> d9d91fb5d60d
+Successfully built d9d91fb5d60d
+Successfully tagged gpu-manager:latest
+  Building device plugin...
+DEPRECATED: The legacy builder is deprecated and will be removed in a future release.
+            Install the buildx component to build images with BuildKit:
+            https://docs.docker.com/go/buildx/
+
+Sending build context to Docker daemon  18.44MB
+Step 1/11 : FROM golang:1.21-alpine AS builder
+ ---> c2321c7cf721
+Step 2/11 : WORKDIR /app
+ ---> Using cache
+ ---> 0277ad1fed3a
+Step 3/11 : COPY go.mod go.sum ./
+ ---> Using cache
+ ---> 3104b265c485
+Step 4/11 : RUN go mod download
+ ---> Using cache
+ ---> da9d205a0acb
+Step 5/11 : COPY . .
+ ---> Using cache
+ ---> 784b940feaa3
+Step 6/11 : RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o gpu-slice-plugin .
+ ---> Using cache
+ ---> 7b71c13ba53d
+Step 7/11 : FROM alpine:latest
+ ---> a40c03cbb81c
+Step 8/11 : RUN apk --no-cache add ca-certificates
+ ---> Using cache
+ ---> 32f61b2c2784
+Step 9/11 : WORKDIR /root/
+ ---> Using cache
+ ---> d9d9078d7e79
+Step 10/11 : COPY --from=builder /app/gpu-slice-plugin .
+ ---> Using cache
+ ---> c6d384bcffd2
+Step 11/11 : CMD ["./gpu-slice-plugin"]
+ ---> Using cache
+ ---> 9aa8596b06cf
+Successfully built 9aa8596b06cf
+Successfully tagged gpu-slice-plugin:latest
+  Building GPU app...
+DEPRECATED: The legacy builder is deprecated and will be removed in a future release.
+            Install the buildx component to build images with BuildKit:
+            https://docs.docker.com/go/buildx/
+
+Sending build context to Docker daemon  9.728kB
+Step 1/8 : FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
+ ---> f0ddf10f1902
+Step 2/8 : ENV DEBIAN_FRONTEND=noninteractive
+ ---> Using cache
+ ---> 4d5bbf65d912
+Step 3/8 : RUN apt-get update -qq &&     apt-get install -y python3 python3-pip curl &&     rm -rf /var/lib/apt/lists/*
+ ---> Using cache
+ ---> e4bc48be4d05
+Step 4/8 : RUN pip3 install --no-cache-dir     cupy-cuda12x     flask     requests     psutil
+ ---> Using cache
+ ---> b34643e6d4fa
+Step 5/8 : WORKDIR /app
+ ---> Using cache
+ ---> 53d79d1f6f61
+Step 6/8 : COPY gpu_app.py .
+ ---> Using cache
+ ---> 6bdaf28de9b3
+Step 7/8 : EXPOSE 8080
+ ---> Using cache
+ ---> 8e24eef07594
+Step 8/8 : CMD ["python3", "gpu_app.py"]
+ ---> Using cache
+ ---> 1d5e206a3226
+Successfully built 1d5e206a3226
+Successfully tagged gpu-fractional-app:latest
+  Building custom scaler...
+DEPRECATED: The legacy builder is deprecated and will be removed in a future release.
+            Install the buildx component to build images with BuildKit:
+            https://docs.docker.com/go/buildx/
+
+Sending build context to Docker daemon  8.704kB
+Step 1/6 : FROM ubuntu:22.04
+ ---> 8ea4cbcf3a26
+Step 2/6 : RUN apt-get update -qq && apt-get install -y     python3 python3-pip curl     && rm -rf /var/lib/apt/lists/*
+ ---> Using cache
+ ---> c8592a60843a
+Step 3/6 : RUN pip3 install requests kubernetes
+ ---> Using cache
+ ---> 81b7f00500d8
+Step 4/6 : WORKDIR /app
+ ---> Using cache
+ ---> 29ef5a63b5b4
+Step 5/6 : COPY gpu_scaler.py .
+ ---> Using cache
+ ---> addcafcfd9bc
+Step 6/6 : CMD ["python3", "gpu_scaler.py"]
+ ---> Using cache
+ ---> 7e3f934c36e4
+Successfully built 7e3f934c36e4
+Successfully tagged custom-gpu-scaler:latest
+  Importing to k3s...
+[sudo] password for pradnyanand-jade: 
+docker.io/library/gpu manager:latest            saved
+application/vnd.oci.image.manifest.v1+json sha256:a48b1080e4b876d409d668e4c062d82fa5b0bb8898c533991fbfe89491422676
+Importing       elapsed: 1.0 s  total:   0.0 B  (0.0 B/s)
+docker.io/library/gpu slice plugin:lates        saved
+application/vnd.oci.image.manifest.v1+json sha256:f994261be41efc3f93a33f3b775f7664f68fb54cf6e2aef72b24f8393c6bad2c
+Importing       elapsed: 0.3 s  total:   0.0 B  (0.0 B/s)
+docker.io/library/gpu fractional app:lat        saved
+application/vnd.oci.image.manifest.v1+json sha256:bacb70922384de3f02f64f0952f33c65d7acf8767e31e2e9d14d530835b8bb37
+Importing       elapsed: 24.5s  total:   0.0 B  (0.0 B/s)
+docker.io/library/custom gpu scaler:late        saved
+application/vnd.oci.image.manifest.v1+json sha256:7b93e8f5d891a3baaf280918eff3d5286475f3cac4f11b59e4573ec7c5a270ef
+Importing       elapsed: 5.1 s  total:   0.0 B  (0.0 B/s)
+✅ All images built and imported
+
+2. Deploying GPU DaemonSet...
+Warning: Immediate deletion does not wait for confirmation that the running resource has been terminated. The resource may continue to run on the cluster indefinitely.
+daemonset.apps "gpu-sidecar" force deleted from kube-system namespace
+daemonset.apps/gpu-sidecar created
+
+3. Waiting for DaemonSet (checking pod 2/2 ready)...
+  Waiting... (1/40) status=0/2
+  Waiting... (2/40) status=1/2
+  Waiting... (3/40) status=1/2
+✅ DaemonSet ready! (2/2 containers running)
+
+4. Verifying GPU resources...
+✅ GPU slices advertised: 6
+
+5. Deploying HPA application...
+deployment.apps/hpa-fractional-app configured
+service/hpa-fractional-app unchanged
+horizontalpodautoscaler.autoscaling/hpa-fractional-autoscaler unchanged
+
+6. Deploying Custom Scaler...
+deployment.apps/custom-fractional-app configured
+service/custom-fractional-app unchanged
+deployment.apps/custom-gpu-scaler unchanged
+serviceaccount/custom-gpu-scaler unchanged
+role.rbac.authorization.k8s.io/custom-gpu-scaler unchanged
+rolebinding.rbac.authorization.k8s.io/custom-gpu-scaler unchanged
+
+7. Waiting for applications...
+✅ All applications ready!
+  HPA: 1 pods
+  Custom: 1 pods
+  Scaler: 1 pods
+
+8. Setting up port forwarding...
+Port forwards: HPA=8003, Custom=8004 (PIDs: 275082, 275127)
+
+9. Testing connectivity...
+✅ HPA app accessible
+✅ Custom app accessible
+
+10. System Status:
+NAME                    READY   UP-TO-DATE   AVAILABLE   AGE
+custom-fractional-app   1/1     1            1           4m40s
+custom-gpu-scaler       1/1     1            1           4m40s
+hpa-fractional-app      1/1     1            1           4m40s
+
+NAME                                   READY   STATUS    RESTARTS   AGE     IP            NODE   NOMINATED NODE   READINESS GATES
+custom-fractional-app-99b956c7-db7c2   1/1     Running   0          4m40s   10.42.0.253   jade   <none>           <none>
+custom-gpu-scaler-6b885747f8-bn5m2     1/1     Running   0          4m40s   10.42.0.254   jade   <none>           <none>
+hpa-fractional-app-7888ff8b9f-tpf8z    1/1     Running   0          4m40s   10.42.0.252   jade   <none>           <none>
+
+NAME                        REFERENCE                       TARGETS              MINPODS   MAXPODS   REPLICAS   AGE
+hpa-fractional-autoscaler   Deployment/hpa-fractional-app   cpu: <unknown>/50%   1         6         1          4m40s
+
+GPU slices allocated: 2/6
+
+🎉 DEPLOYMENT COMPLETE!
+================================
+✅ Fractional GPU system deployed
+✅ Port forwarding active (no sudo needed)
+
+🧪 RUN DEMO:
+   python3 demo-fractional.py
+
+🛑 STOP PORT FORWARDS:
+   kill 275082 275127
+pradnyanand-jade@Jade:~/Downloads/chinmay-plugin$ 

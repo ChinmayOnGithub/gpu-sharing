@@ -6,7 +6,7 @@ RUN apt-get update -qq && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python packages
-RUN pip3 install requests kubernetes
+RUN pip3 install requests kubernetes tenacity
 
 # Create app directory
 WORKDIR /app

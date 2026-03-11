@@ -111,17 +111,38 @@ func (m *GPUSliceDevicePlugin) Allocate(ctx context.Context, reqs *pluginapi.All
 			},
 		}
 		
+		// Calculate MPS settings for 6 slices
+		threadPct := 100 / 6                     // 16% compute per slice
+		memLimitMB := 6144 / 6                   // 1024 MB memory per slice
+		memLimitStr := fmt.Sprintf("0=%dm", memLimitMB)   // MPS format: "0=1024m"
+		
 		// Set environment variables for the container
 		envs := map[string]string{
-			"GPU_SLICE_ID":           sliceInfo.SliceID,
-			"GPU_MEMORY_LIMIT_BYTES": fmt.Sprintf("%d", sliceInfo.MemoryLimitBytes),
+			// ✅ ENFORCED by NVIDIA MPS daemon — limits compute to 1/6th
+			"CUDA_MPS_ACTIVE_THREAD_PERCENTAGE": fmt.Sprintf("%d", threadPct),
+			// ✅ ENFORCED by NVIDIA MPS daemon — limits pinned GPU memory
+			"CUDA_MPS_PINNED_DEVICE_MEM_LIMIT": memLimitStr,
+			// Standard NVIDIA env vars
 			"NVIDIA_VISIBLE_DEVICES": "0",
 			"NVIDIA_DRIVER_CAPABILITIES": "compute,utility",
+			"CUDA_VISIBLE_DEVICES": "0",
+			// For your app's own awareness (informational)
+			"GPU_SLICE_ID":           sliceInfo.SliceID,
+			"GPU_MEMORY_LIMIT_BYTES": fmt.Sprintf("%d", sliceInfo.MemoryLimitBytes),
+			"GPU_THREAD_PCT":         fmt.Sprintf("%d", threadPct),
 		}
 		
 		responses[i] = &pluginapi.ContainerAllocateResponse{
 			Devices: deviceSpecs,
 			Envs:    envs,
+			// ── MPS socket mount — container must reach MPS daemon ──────────
+			Mounts: []*pluginapi.Mount{
+				{
+					ContainerPath: "/tmp/nvidia-mps",
+					HostPath:      "/tmp/nvidia-mps",   // MPS daemon creates this socket
+					ReadOnly:      false,
+				},
+			},
 		}
 	}
 	

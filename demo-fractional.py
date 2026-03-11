@@ -28,7 +28,7 @@ os.makedirs(RESULTS_DIR, exist_ok=True)
 def run_cmd(cmd):
     try:
         if cmd.startswith("kubectl"):
-            cmd = f"sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml {cmd}"
+            cmd = f"sudo kubectl --kubeconfig=/etc/rancher/k3s/k3s.yaml {cmd[8:]}"  # Remove 'kubectl ' and add the fixed pattern
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)
         return result.stdout.strip()
     except:
@@ -189,14 +189,14 @@ def main():
     # ── Restart GPU manager to clear stuck slice allocations ──
     print("\n🔄 Restarting GPU manager to clear allocations...")
     subprocess.run(
-        "sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl rollout restart daemonset gpu-sidecar -n kube-system",
+        "sudo kubectl --kubeconfig=/etc/rancher/k3s/k3s.yaml rollout restart daemonset gpu-sidecar -n kube-system",
         shell=True
     )
     
     # Wait for it to come back 2/2
     for _ in range(20):
         ready = subprocess.run(
-            "sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl get pods -n kube-system "
+            "sudo kubectl --kubeconfig=/etc/rancher/k3s/k3s.yaml get pods -n kube-system "
             "-l app=gpu-sidecar --no-headers | awk '{print $2}'",
             shell=True, capture_output=True, text=True
         ).stdout.strip()

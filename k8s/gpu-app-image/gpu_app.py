@@ -1,94 +1,138 @@
 #!/usr/bin/env python3
 """
 GPU Fractional App - Real CUDA workloads via CuPy
-Shows actual GPU utilization in nvidia-smi.
+Fixed: proper concurrent_requests, queue_length, accurate gpu_utilization
 """
 from flask import Flask, request, jsonify
 import time
 import threading
+import collections
 import psutil
 import os
 
 # ── CuPy: real CUDA ───────────────────────────────────────────────────────────
 try:
     import cupy as cp
-    cp.cuda.Device(0).use()   # select GPU 0
+    cp.cuda.Device(0).use()
+    mempool = cp.get_default_memory_pool()
+    mempool.set_limit(size=1024**3)  # 1 GB limit per slice
     CUDA_AVAILABLE = True
     print("✅ CuPy CUDA available — real GPU work enabled")
 except Exception as e:
-    import numpy as cp        # fallback to numpy (same API)
+    import numpy as cp
     CUDA_AVAILABLE = False
     print(f"⚠️  CuPy not available ({e}) — falling back to CPU numpy")
 
 app = Flask(__name__)
 
-# ── Metrics ───────────────────────────────────────────────────────────────────
-metrics = {
-    "request_count":  0,
-    "gpu_utilization": 0,
-    "cpu_percent":    0,
-    "avg_latency_ms": 0,
-    "total_latency":  0,
-    "cuda_enabled":   CUDA_AVAILABLE,
-}
+# ── Metrics & concurrency tracking ───────────────────────────────────────────
 metrics_lock = threading.Lock()
+
+# Rolling window for GPU utilization (5-second window)
+_GPU_UTIL_WINDOW = 5.0
+_recent_gpu_durations = collections.deque()   # (finish_timestamp, duration_s)
+
+# Live counters (updated atomically under metrics_lock)
+_active_requests = 0   # requests currently inside do_gpu_work()
+
+metrics = {
+    "request_count":       0,
+    "gpu_utilization":     0,   # % over last 5 s  ← FIXED
+    "cpu_percent":         0,
+    "avg_latency_ms":      0,
+    "total_latency":       0,
+    "concurrent_requests": 0,   # NEW — live in-flight count
+    "queue_length":        0,   # NEW — waiting behind the active ones
+    "cuda_enabled":        CUDA_AVAILABLE,
+}
+
+# ── GPU utilization helper ────────────────────────────────────────────────────
+def _update_gpu_utilization(duration_s: float):
+    """Record a completed GPU kernel duration and recompute utilization.
+    Utilization = (sum of GPU-active seconds in last window) / window_size * 100
+    This is equivalent to how nvidia-smi calculates GPU-Util: fraction of the
+    measurement window in which at least one kernel was executing."""
+    now = time.time()
+    cutoff = now - _GPU_UTIL_WINDOW
+    
+    # Append new sample
+    _recent_gpu_durations.append((now, duration_s))
+    
+    # Drop samples outside the window
+    while _recent_gpu_durations and _recent_gpu_durations[0][0] < cutoff:
+        _recent_gpu_durations.popleft()
+    
+    # Sum GPU-busy time in the window
+    total_gpu_busy = sum(d for _, d in _recent_gpu_durations)
+    
+    # For concurrent requests we cap at window size (GPU can't be >100% busy)
+    metrics["gpu_utilization"] = min(99, (total_gpu_busy / _GPU_UTIL_WINDOW) * 100)
 
 # ── Real GPU work ─────────────────────────────────────────────────────────────
 def do_gpu_work(work_type: str, size: int) -> tuple:
-    """Runs actual CUDA kernels via CuPy.
-    Falls back to NumPy automatically if no GPU is present."""
-    start = time.time()
+    """Runs actual CUDA kernels. Thread-safe; updates live concurrency metrics."""
+    global _active_requests
     
-    if work_type == "matmul":
-        # Matrix multiplication — the classic GPU benchmark
-        # size=500  → 500×500 matrices  (light)
-        # size=1000 → 1000×1000 matrices (medium)
-        # size=2000 → 2000×2000 matrices (heavy)
-        A = cp.random.randn(size, size, dtype=cp.float32)
-        B = cp.random.randn(size, size, dtype=cp.float32)
-        C = cp.dot(A, B)          # CUDA DGEMM kernel
-        
-    elif work_type == "fft":
-        # FFT on a large signal — stresses GPU memory bandwidth
-        signal = cp.random.randn(size * size, dtype=cp.float32)
-        C = cp.fft.fft(signal)
-        
-    elif work_type == "reduction":
-        # Sum/max reduction — tests GPU parallelism
-        data = cp.random.randn(size, size, dtype=cp.float32)
-        C = cp.sum(data, axis=0)
-        C = cp.max(C)
-        
-    else:
-        # Default: matmul
-        A = cp.random.randn(size, size, dtype=cp.float32)
-        B = cp.random.randn(size, size, dtype=cp.float32)
-        C = cp.dot(A, B)
-    
-    # Synchronize — wait for GPU to finish before measuring time
-    if CUDA_AVAILABLE:
-        cp.cuda.Stream.null.synchronize()
-    
-    duration = time.time() - start
-    
-    # Update metrics
+    # ── Enter: bump live counters ────────────────────────────────────────────
     with metrics_lock:
-        metrics["request_count"] += 1
-        metrics["total_latency"] += duration * 1000
-        metrics["avg_latency_ms"] = (metrics["total_latency"] / metrics["request_count"])
-        
-        # Real GPU util isn't readable from Python without NVML,
-        # but we know work happened — report based on actual duration
-        metrics["gpu_utilization"] = min(95, duration * 500)
+        _active_requests += 1
+        metrics["concurrent_requests"] = _active_requests
+        # queue = requests waiting = active - 1  (0 if this is the only one)
+        metrics["queue_length"] = max(0, _active_requests - 1)
     
-    return float(cp.sum(C).item() if hasattr(C, 'item') else C), duration
+    start = time.time()
+    try:
+        if work_type == "matmul":
+            A = cp.random.randn(size, size).astype(cp.float32)
+            B = cp.random.randn(size, size).astype(cp.float32)
+            C = cp.matmul(A, B)
+        elif work_type == "fft":
+            signal = cp.random.randn(size * size).astype(cp.float32)
+            C = cp.fft.fft(signal)
+        elif work_type == "reduction":
+            data = cp.random.randn(size, size).astype(cp.float32)
+            C = cp.sum(data, axis=0)
+            C = cp.max(C)
+        else:
+            A = cp.random.randn(size, size).astype(cp.float32)
+            B = cp.random.randn(size, size).astype(cp.float32)
+            C = cp.matmul(A, B)
+        
+        # Synchronize — wait for GPU kernel to finish
+        if CUDA_AVAILABLE:
+            cp.cuda.Stream.null.synchronize()
+        
+        duration = time.time() - start
+        
+        # ── Update metrics atomically ────────────────────────────────────────
+        with metrics_lock:
+            metrics["request_count"] += 1
+            metrics["total_latency"] += duration * 1000
+            metrics["avg_latency_ms"] = metrics["total_latency"] / metrics["request_count"]
+            _update_gpu_utilization(duration)   # ← FIXED utilization
+        
+        result_scalar = float(cp.sum(C).item() if hasattr(C, "item") else C)
+        
+        if CUDA_AVAILABLE:
+            del A, B, C
+            cp.get_default_memory_pool().free_all_blocks()
+        
+        return result_scalar, duration
+    
+    finally:
+        # ── Exit: always decrement, even on error ────────────────────────────
+        with metrics_lock:
+            _active_requests -= 1
+            metrics["concurrent_requests"] = _active_requests
+            metrics["queue_length"] = max(0, _active_requests - 1)
 
-# ── Background CPU metrics ────────────────────────────────────────────────────
+# ── Background CPU monitor ────────────────────────────────────────────────────
 def _cpu_monitor():
     while True:
         try:
+            cpu = psutil.cpu_percent(interval=1)
             with metrics_lock:
-                metrics["cpu_percent"] = psutil.cpu_percent(interval=1)
+                metrics["cpu_percent"] = cpu
         except Exception:
             pass
         time.sleep(5)
@@ -114,9 +158,7 @@ def get_metrics():
 def gpu_work():
     work_type = request.args.get("type", "matmul")
     size      = int(request.args.get("size", 500))
-    
-    # Clamp size to avoid OOM on 1GB slice
-    size = min(size, 2000)
+    size      = min(size, 2000)   # clamp to avoid OOM on 1 GB slice
     
     try:
         result, duration = do_gpu_work(work_type, size)

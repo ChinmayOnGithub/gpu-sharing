@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nvidia-mps
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      app: nvidia-mps
+  template:
+    metadata:
+      labels:
+        app: nvidia-mps
+    spec:
+      nodeSelector:
+        accelerator: nvidia
+      hostIPC: true   # MPS requires shared IPC namespace
+      hostPID: true
+      tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+      initContainers:
+      - name: set-exclusive-mode
+        image: nvidia/cuda:12.1.0-base-ubuntu22.04
+        command:
+        - /bin/sh
+        - -c
+        - |
+          nvidia-smi -i 0 -c EXCLUSIVE_PROCESS
+          echo "✅ GPU set to EXCLUSIVE_PROCESS"
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: dev
+          mountPath: /dev
+      containers:
+      - name: mps-daemon
+        image: nvidia/cuda:12.1.0-base-ubuntu22.04
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Starting NVIDIA MPS Control Daemon..."
+          nvidia-cuda-mps-control -d
+          echo "✅ MPS daemon started"
+          # Keep container alive — tail the MPS log
+          tail -f /var/log/nvidia-mps/control.log 2>/dev/null || sleep infinity
+        securityContext:
+          privileged: true
+        env:
+        - name: NVIDIA_VISIBLE_DEVICES
+          value: "0"
+        - name: NVIDIA_DRIVER_CAPABILITIES
+          value: "compute,utility"
+        volumeMounts:
+        - name: dev
+          mountPath: /dev
+        - name: mps-socket
+          mountPath: /tmp/nvidia-mps    # MPS socket — shared with pods
+        - name: mps-log
+          mountPath: /var/log/nvidia-mps
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+      volumes:
+      - name: dev
+        hostPath:
+          path: /dev
+      - name: mps-socket
+        hostPath:
+          path: /tmp/nvidia-mps
+          type: DirectoryOrCreate
+      - name: mps-log
+        hostPath:
+          path: /var/log/nvidia-mps
+          type: DirectoryOrCreate

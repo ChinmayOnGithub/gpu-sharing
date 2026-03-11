@@ -3,7 +3,7 @@
 echo "🔍 FRACTIONAL GPU SYSTEM STATUS CHECK"
 echo "====================================="
 
-K="sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl"
+K="sudo kubectl --kubeconfig=/etc/rancher/k3s/k3s.yaml"
 
 echo "1. DaemonSet Status:"
 $K get daemonsets -n kube-system | grep gpu-sidecar || echo "❌ No GPU DaemonSet found"

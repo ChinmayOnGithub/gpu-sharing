@@ -18,6 +18,7 @@ spec:
         app: custom-fractional-app
         scaler: custom-fractional
     spec:
+      runtimeClassName: nvidia
       nodeSelector:
         nvidia.com/gpu.present: "true"
       containers:
@@ -39,6 +40,10 @@ spec:
             memory: "1Gi"
         
         env:
+        - name: NVIDIA_VISIBLE_DEVICES
+          value: "all"
+        - name: NVIDIA_DRIVER_CAPABILITIES
+          value: "compute,utility"
         - name: NODE_NAME
           valueFrom:
             fieldRef:
@@ -124,27 +129,25 @@ metadata:
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
+kind: ClusterRole
 metadata:
   name: custom-gpu-scaler
-  namespace: default
 rules:
 - apiGroups: ["apps"]
-  resources: ["deployments", "deployments/scale"]
+  resources: ["deployments", "deployments/scale", "deployments/status"]
   verbs: ["get", "list", "watch", "patch", "update"]
 - apiGroups: [""]
-  resources: ["pods", "nodes"]
+  resources: ["pods"]
   verbs: ["get", "list", "watch"]
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
+kind: ClusterRoleBinding
 metadata:
   name: custom-gpu-scaler
-  namespace: default
 roleRef:
   apiGroup: rbac.authorization.k8s.io
-  kind: Role
+  kind: ClusterRole
   name: custom-gpu-scaler
 subjects:
 - kind: ServiceAccount

@@ -44,6 +44,9 @@ import uuid
 # GPU runtime detection
 try:
     import cupy as cp
+    # Enable memory pool for faster allocation/deallocation
+    mempool = cp.get_default_memory_pool()
+    mempool.set_limit(size=1024**3)  # 1GB limit for slice
     GPU_AVAILABLE = True
 except Exception:
     cp = None
@@ -261,10 +264,10 @@ def process_matmul_batch_gpu(sizes: List[int]) -> List[float]:
             matrix_size = max(800, min(size, 1400))
             
             # Create matrices on GPU
-            mat_a = cp.random.rand(matrix_size, matrix_size, dtype=cp.float32)
-            mat_b = cp.random.rand(matrix_size, matrix_size, dtype=cp.float32)
+            mat_a = cp.random.rand(matrix_size, matrix_size).astype(cp.float32)
+            mat_b = cp.random.rand(matrix_size, matrix_size).astype(cp.float32)
             
-            # GPU matrix multiplication
+            # GPU matrix multiplication - use matmul for better performance
             result = cp.matmul(mat_a, mat_b)
             
             # Reduced GPU operations for controlled utilization
@@ -280,6 +283,10 @@ def process_matmul_batch_gpu(sizes: List[int]) -> List[float]:
         
         # Synchronize once for entire batch
         cp.cuda.Stream.null.synchronize()
+        
+        # Free memory pool blocks
+        cp.get_default_memory_pool().free_all_blocks()
+        
         return results
         
     except Exception as e:

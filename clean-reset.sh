@@ -3,7 +3,7 @@
 echo "🧹 CLEANING ALL FRACTIONAL GPU RESOURCES"
 echo "========================================"
 
-K="sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl"
+K="sudo kubectl --kubeconfig=/etc/rancher/k3s/k3s.yaml"
 
 # Stop all port forwards
 echo "1. Stopping port forwards..."
