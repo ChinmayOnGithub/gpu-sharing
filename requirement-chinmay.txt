@@ -1,0 +1,10 @@
+python3
+docker
+k3s
+cuda-tool kit
+nvidia drivers
+nvidia container runtime
+cuda mps
+golang
+git
+jq
